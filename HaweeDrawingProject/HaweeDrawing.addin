@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+	<AddIn Type="Command">
+		<Name>MEP Pipe to JSON</Name>
+		<Assembly>C:\Users\ACER\Desktop\Coding\HaweeDrawingProject\HaweeDrawingProject\HaweeDrawingProject\bin\Debug\HaweeDrawingProject.dll</Assembly>
+		<AddInId>7B092120-00E2-4C64-9A4E-7C1D182A45A0</AddInId>
+		<FullClassName>HaweeDrawingProject.Commands.ShowMainWindowCommand</FullClassName>
+		<VendorId>CuongDo</VendorId>
+		<VendorDescription>Đỗ Hùng Cường</VendorDescription>
+	</AddIn>
+</RevitAddIns>
