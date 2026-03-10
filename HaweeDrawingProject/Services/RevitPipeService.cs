@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Diagnostics;
 
 namespace HaweeDrawingProject.Services
 {
@@ -219,156 +220,271 @@ namespace HaweeDrawingProject.Services
             }
         }
 
-        public void ImportPipesFromJson(string filePath, ElementId targetLevelId)
+        public ImportResult ImportPipesFromJson(string filePath, ElementId targetLevelId)
         {
-            string json = File.ReadAllText(filePath);
-            ExportDocument exportDoc = JsonConvert.DeserializeObject<ExportDocument>(json);
+            var result = new ImportResult();
 
-            var allPipeTypes = new FilteredElementCollector(_doc).OfClass(typeof(PipeType)).Cast<PipeType>().ToList();
-            var allSystemTypes = new FilteredElementCollector(_doc).OfClass(typeof(PipingSystemType)).Cast<PipingSystemType>().ToList();
-            var allSymbols = new FilteredElementCollector(_doc).OfClass(typeof(FamilySymbol)).OfCategory(BuiltInCategory.OST_PipeFitting).Cast<FamilySymbol>().ToList();
-            var allLevels = new FilteredElementCollector(_doc).OfClass(typeof(Level)).Cast<Level>().ToList();
-            ElementId fallbackLevelId = allLevels.FirstOrDefault()?.Id;
-
-            if (allSymbols.Count == 0 && exportDoc.Fittings.Count > 0)
+            try
             {
-                System.Windows.MessageBox.Show("CẢNH BÁO: Project này chưa được load bất kỳ Family Phụ kiện nào.\nHệ thống sẽ chỉ vẽ được đường ống thẳng!", "Cảnh báo", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-            }
+                string json = File.ReadAllText(filePath);
+                ExportDocument exportDoc = JsonConvert.DeserializeObject<ExportDocument>(json);
 
-            Dictionary<string, Element> idMap = new Dictionary<string, Element>();
+                var allPipeTypes = new FilteredElementCollector(_doc).OfClass(typeof(PipeType)).Cast<PipeType>().ToList();
+                var allSystemTypes = new FilteredElementCollector(_doc).OfClass(typeof(PipingSystemType)).Cast<PipingSystemType>().ToList();
+                var allSymbols = new FilteredElementCollector(_doc).OfClass(typeof(FamilySymbol)).OfCategory(BuiltInCategory.OST_PipeFitting).Cast<FamilySymbol>().ToList();
+                var allLevels = new FilteredElementCollector(_doc).OfClass(typeof(Level)).Cast<Level>().ToList();
+                ElementId fallbackLevelId = allLevels.FirstOrDefault()?.Id;
 
-            using (Transaction t = new Transaction(_doc, "Import MEP Elements"))
-            {
-                FailureHandlingOptions options = t.GetFailureHandlingOptions();
-                options.SetFailuresPreprocessor(new WarningSwallower());
-                t.SetFailureHandlingOptions(options);
-
-                t.Start();
-
-                foreach (var fittingData in exportDoc.Fittings)
+                if (allSymbols.Count == 0 && exportDoc.Fittings.Count > 0)
                 {
-                    XYZ location = ParseXYZ(fittingData.LocationPoint);
-                    ElementId fittingLevelId = targetLevelId != ElementId.InvalidElementId ? targetLevelId : (allLevels.FirstOrDefault(l => l.Name == fittingData.LevelName)?.Id ?? fallbackLevelId);
+                    string warn = "CẢNH BÁO: Project này chưa được load bất kỳ Family Phụ kiện nào. Hệ thống sẽ chỉ vẽ được đường ống thẳng!";
+                    result.Messages.Add(warn);
+                    System.Windows.MessageBox.Show(warn, "Cảnh báo", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                }
 
-                    FamilySymbol symbol = allSymbols.FirstOrDefault(x => x.FamilyName == fittingData.FamilyName && x.Name == fittingData.TypeName);
-                    if (symbol == null && allSymbols.Count > 0) symbol = allSymbols.FirstOrDefault();
+                Dictionary<string, Element> idMap = new Dictionary<string, Element>();
 
-                    if (symbol != null)
+                using (Transaction t = new Transaction(_doc, "Import MEP Elements"))
+                {
+                    FailureHandlingOptions options = t.GetFailureHandlingOptions();
+                    options.SetFailuresPreprocessor(new WarningSwallower());
+                    t.SetFailureHandlingOptions(options);
+
+                    t.Start();
+
+                    foreach (var fittingData in exportDoc.Fittings)
                     {
-                        if (!symbol.IsActive) symbol.Activate();
-                        FamilyInstance newFitting = _doc.Create.NewFamilyInstance(location, symbol, _doc.GetElement(fittingLevelId) as Level, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
-
-                        SetFittingSize(newFitting, fittingData);
-
-                        if (fittingData.Connectors != null && fittingData.Connectors.Count == 2)
+                        try
                         {
-                            string pipe1Id = fittingData.Connectors[0].ConnectedToId;
-                            string pipe2Id = fittingData.Connectors[1].ConnectedToId;
+                            XYZ location = ParseXYZ(fittingData.LocationPoint);
+                            ElementId fittingLevelId = targetLevelId != ElementId.InvalidElementId ? targetLevelId : (allLevels.FirstOrDefault(l => l.Name == fittingData.LevelName)?.Id ?? fallbackLevelId);
 
-                            var pipe1Data = exportDoc.Pipes.FirstOrDefault(p => p.Id == pipe1Id);
-                            var pipe2Data = exportDoc.Pipes.FirstOrDefault(p => p.Id == pipe2Id);
-
-                            if (pipe1Data != null && pipe2Data != null)
+                            FamilySymbol symbol = allSymbols.FirstOrDefault(x => x.FamilyName == fittingData.FamilyName && x.Name == fittingData.TypeName);
+                            if (symbol == null)
                             {
-                                XYZ center = location;
+                                symbol = allSymbols.FirstOrDefault(x => x.FamilyName == fittingData.FamilyName);
 
-                                XYZ p1Start = ParseXYZ(pipe1Data.StartPoint);
-                                XYZ p1End = ParseXYZ(pipe1Data.EndPoint);
-                                XYZ p1FarPoint = (p1Start.DistanceTo(center) > p1End.DistanceTo(center)) ? p1Start : p1End;
-
-                                XYZ p2Start = ParseXYZ(pipe2Data.StartPoint);
-                                XYZ p2End = ParseXYZ(pipe2Data.EndPoint);
-                                XYZ p2FarPoint = (p2Start.DistanceTo(center) > p2End.DistanceTo(center)) ? p2Start : p2End;
-
-                                XYZ v1 = new XYZ(p1FarPoint.X - center.X, p1FarPoint.Y - center.Y, 0).Normalize();
-                                XYZ v2 = new XYZ(p2FarPoint.X - center.X, p2FarPoint.Y - center.Y, 0).Normalize();
-
-                                XYZ vSum = v1 + v2;
-                                double alphaRadian = Math.Atan2(vSum.Y, vSum.X);
-                                double alphaDegree = alphaRadian * (180.0 / Math.PI);
-
-                                double betaDegree = 135.0; 
-                                double thetaDegree = alphaDegree - betaDegree;
-                                double thetaRadian = thetaDegree * (Math.PI / 180.0);
-
-                                if (thetaRadian != 0)
+                                if (symbol == null)
                                 {
-                                    Line axisZ = Line.CreateBound(center, center + XYZ.BasisZ);
-                                    ElementTransformUtils.RotateElement(_doc, newFitting.Id, axisZ, thetaRadian);
+                                    symbol = allSymbols.FirstOrDefault(x => x.FamilyName.ToLower().Contains("elbow") || x.Name.ToLower().Contains("elbow"));
+                                }
+
+                                if (symbol == null)
+                                {
+                                    result.Errors.Add($"KHÔNG TÌM THẤY FITTING: Project hiện tại chưa load Family '{fittingData.FamilyName}'. Bỏ qua phần tử {fittingData.Id}.");
+                                    continue;
                                 }
                             }
-                        }
-                        else
-                        {
-                            double angleRadian = fittingData.Angle * (Math.PI / 180.0);
-                            if (angleRadian != 0)
+
+                            if (symbol != null)
                             {
-                                Line axis = Line.CreateBound(location, location + XYZ.BasisZ);
-                                ElementTransformUtils.RotateElement(_doc, newFitting.Id, axis, angleRadian);
-                            }
-                        }
+                                if (!symbol.IsActive) symbol.Activate();
+                                FamilyInstance newFitting = _doc.Create.NewFamilyInstance(location, symbol, _doc.GetElement(fittingLevelId) as Level, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
 
-                        idMap[fittingData.Id] = newFitting;
-                    }
-                }
+                                // 1. Set kích thước trước
+                                SetFittingSize(newFitting, fittingData);
 
-                foreach (var pipeData in exportDoc.Pipes)
-                {
-                    XYZ startXYZ = ParseXYZ(pipeData.StartPoint);
-                    XYZ endXYZ = ParseXYZ(pipeData.EndPoint);
-
-                    ElementId pipeLevelId = targetLevelId != ElementId.InvalidElementId ? targetLevelId : (allLevels.FirstOrDefault(l => l.Name == pipeData.LevelName)?.Id ?? fallbackLevelId);
-                    ElementId currentPipeTypeId = allPipeTypes.FirstOrDefault(x => x.Name == pipeData.PipeTypeName)?.Id ?? allPipeTypes.FirstOrDefault()?.Id;
-                    ElementId currentSystemTypeId = allSystemTypes.FirstOrDefault(x => x.Name == pipeData.SystemTypeName)?.Id ?? allSystemTypes.FirstOrDefault()?.Id;
-
-                    if (currentPipeTypeId == null || currentSystemTypeId == null) continue;
-
-                    Pipe newPipe = Pipe.Create(_doc, currentSystemTypeId, currentPipeTypeId, pipeLevelId, startXYZ, endXYZ);
-
-                    Parameter diameterParam = newPipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM);
-                    if (diameterParam != null && !diameterParam.IsReadOnly)
-                    {
-                        diameterParam.Set(pipeData.Diameter);
-                    }
-
-                    idMap[pipeData.Id] = newPipe;
-                }
-
-                _doc.Regenerate();
-
-                // 3. KẾT NỐI CONNECTOR
-                foreach (var pipeData in exportDoc.Pipes)
-                {
-                    if (!idMap.ContainsKey(pipeData.Id)) continue;
-                    Element currentPipe = idMap[pipeData.Id];
-
-                    if (pipeData.Connectors != null)
-                    {
-                        foreach (var connData in pipeData.Connectors)
-                        {
-                            if (!string.IsNullOrEmpty(connData.ConnectedToId) && idMap.ContainsKey(connData.ConnectedToId))
-                            {
-                                Element targetElement = idMap[connData.ConnectedToId];
-                                XYZ jointLocation = ParseXYZ(connData.Origin);
-
-                                Connector c1 = GetClosestConnector(currentPipe, jointLocation);
-                                Connector c2 = GetClosestConnector(targetElement, jointLocation);
-
-                                if (c1 != null && c2 != null && !c1.IsConnectedTo(c2))
+                                // 2. CHỈ sử dụng Transform xuất từ JSON để căn chỉnh góc và vị trí (Bỏ hết logic tính Vector)
+                                try
                                 {
-                                    try
+                                    var expTf = fittingData.Transform;
+                                    XYZ expOrigin = ParseXYZ(expTf.Origin);
+                                    XYZ expBasisX = ParseXYZ(expTf.BasisX);
+                                    double expAngle = Math.Atan2(expBasisX.Y, expBasisX.X);
+
+                                    Transform instTf = newFitting.GetTransform();
+                                    XYZ instOrigin = instTf.Origin;
+                                    XYZ instBasisX = instTf.BasisX;
+                                    double instAngle = Math.Atan2(instBasisX.Y, instBasisX.X);
+
+                                    double rotateDelta = expAngle - instAngle;
+                                    if (Math.Abs(rotateDelta) > 1e-6)
                                     {
-                                        c1.ConnectTo(c2);
+                                        Line axis = Line.CreateBound(instOrigin, instOrigin + XYZ.BasisZ);
+                                        ElementTransformUtils.RotateElement(_doc, newFitting.Id, axis, rotateDelta);
                                     }
-                                    catch { }
+
+                                    // Cập nhật lại Transform sau khi xoay để di chuyển vị trí chính xác
+                                    instTf = newFitting.GetTransform();
+                                    instOrigin = instTf.Origin;
+                                    XYZ moveDelta = expOrigin - instOrigin;
+                                    if (moveDelta.GetLength() > 1e-6)
+                                    {
+                                        ElementTransformUtils.MoveElement(_doc, newFitting.Id, moveDelta);
+                                    }
+
+                                    _doc.Regenerate();
+                                    result.Messages.Add($"Aligned fitting {newFitting.Id} to exported transform.");
+                                }
+                                catch (Exception ex)
+                                {
+                                    result.Messages.Add($"Warning: failed to align fitting {newFitting.Id}: {ex.Message}");
+                                }
+
+                                idMap[fittingData.Id] = newFitting;
+                                result.FittingsCreated++;
+                            }
+                            else
+                            {
+                                string err = $"Missing fitting family/type for fitting data {fittingData.Id} ({fittingData.FamilyName}/{fittingData.TypeName}).";
+                                result.Errors.Add(err);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            result.Errors.Add($"Exception creating fitting {fittingData.Id}: {ex.Message}");
+                        }
+                    }
+
+                    // Pipes
+                    foreach (var pipeData in exportDoc.Pipes)
+                    {
+                        try
+                        {
+                            XYZ startXYZ = ParseXYZ(pipeData.StartPoint);
+                            XYZ endXYZ = ParseXYZ(pipeData.EndPoint);
+
+                            ElementId pipeLevelId = targetLevelId != ElementId.InvalidElementId ? targetLevelId : (allLevels.FirstOrDefault(l => l.Name == pipeData.LevelName)?.Id ?? fallbackLevelId);
+                            ElementId currentPipeTypeId = allPipeTypes.FirstOrDefault(x => x.Name == pipeData.PipeTypeName)?.Id ?? allPipeTypes.FirstOrDefault()?.Id;
+                            ElementId currentSystemTypeId = allSystemTypes.FirstOrDefault(x => x.Name == pipeData.SystemTypeName)?.Id ?? allSystemTypes.FirstOrDefault()?.Id;
+
+                            if (currentPipeTypeId == null || currentSystemTypeId == null)
+                            {
+                                result.Errors.Add($"Missing pipe type/system for pipe {pipeData.Id}. Skipped.");
+                                continue;
+                            }
+
+                            double length = startXYZ.DistanceTo(endXYZ);
+                            if (length < 0.01) // threshold in feet (~3 mm)
+                            {
+                                result.Messages.Add($"Ghost/Short segment detected for pipe {pipeData.Id}: length={length:F4} ft");
+                            }
+
+                            Pipe newPipe = Pipe.Create(_doc, currentSystemTypeId, currentPipeTypeId, pipeLevelId, startXYZ, endXYZ);
+
+                            Parameter diameterParam = newPipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM);
+                            if (diameterParam != null && !diameterParam.IsReadOnly)
+                            {
+                                diameterParam.Set(pipeData.Diameter);
+                            }
+
+                            idMap[pipeData.Id] = newPipe;
+                            result.PipesCreated++;
+                        }
+                        catch (Exception ex)
+                        {
+                            result.Errors.Add($"Exception creating pipe {pipeData.Id}: {ex.Message}");
+                        }
+                    }
+
+                    _doc.Regenerate();
+
+                    foreach (var pipeData in exportDoc.Pipes)
+                    {
+                        try
+                        {
+                            if (!idMap.ContainsKey(pipeData.Id)) continue;
+                            Element currentPipe = idMap[pipeData.Id];
+
+                            if (pipeData.Connectors != null)
+                            {
+                                foreach (var connData in pipeData.Connectors)
+                                {
+                                    if (!string.IsNullOrEmpty(connData.ConnectedToId))
+                                    {
+                                        if (!idMap.ContainsKey(connData.ConnectedToId)) continue;
+
+                                        Element targetElement = idMap[connData.ConnectedToId];
+                                        XYZ jointLocation = ParseXYZ(connData.Origin);
+
+                                        Connector c1 = GetClosestConnector(currentPipe, jointLocation);
+                                        Connector c2 = GetClosestConnector(targetElement, jointLocation);
+
+                                        if (c1 != null && c2 != null && !c1.IsConnectedTo(c2))
+                                        {
+                                            if (currentPipe is Pipe cp && targetElement is FamilyInstance)
+                                            {
+                                                var lc = cp.Location as LocationCurve;
+                                                if (lc != null)
+                                                {
+                                                    XYZ s = lc.Curve.GetEndPoint(0);
+                                                    XYZ e = lc.Curve.GetEndPoint(1);
+
+                                                    if (s.DistanceTo(c1.Origin) < e.DistanceTo(c1.Origin))
+                                                    {
+                                                        lc.Curve = Line.CreateBound(c2.Origin, e);
+                                                    }
+                                                    else
+                                                    {
+                                                        lc.Curve = Line.CreateBound(s, c2.Origin);
+                                                    }
+
+                                                    _doc.Regenerate();
+
+                                                    c1 = GetClosestConnector(currentPipe, c2.Origin);
+                                                    c2 = GetClosestConnector(targetElement, c2.Origin);
+                                                }
+                                            }
+
+                                            if (c1 != null && c2 != null)
+                                            {
+                                                try
+                                                {
+                                                    c1.ConnectTo(c2);
+                                                    result.Messages.Add($"Thành công nối ống {pipeData.Id} vào {connData.ConnectedToId}.");
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    result.Errors.Add($"Lỗi ConnectTo ({pipeData.Id} -> {connData.ConnectedToId}): {ex.Message}");
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
+                        catch (Exception ex)
+                        {
+                            result.Errors.Add($"Exception tại ống {pipeData.Id}: {ex.Message}");
+                        }
                     }
+
+                    t.Commit();
                 }
 
-                t.Commit();
+                try
+                {
+                    string logPath = Path.ChangeExtension(filePath, ".import.log.txt");
+                    var lines = new List<string>();
+                    lines.Add($"Import completed: PipesCreated={result.PipesCreated}, FittingsCreated={result.FittingsCreated}");
+                    lines.Add("Messages:");
+                    lines.AddRange(result.Messages);
+                    lines.Add("Errors:");
+                    lines.AddRange(result.Errors);
+                    File.WriteAllLines(logPath, lines);
+                    result.Messages.Add($"Log saved to: {logPath}");
+
+                    Debug.WriteLine("=== Import result ===");
+                    Debug.WriteLine($"PipesCreated={result.PipesCreated}, FittingsCreated={result.FittingsCreated}");
+                    foreach (var m in result.Messages) Debug.WriteLine("MSG: " + m);
+                    foreach (var e in result.Errors) Debug.WriteLine("ERR: " + e);
+                }
+                catch (Exception ex)
+                {
+                    result.Messages.Add($"Failed to write log file: {ex.Message}");
+                }
             }
+            catch (Exception ex)
+            {
+                result.Errors.Add("Top-level exception: " + ex.Message);
+            }
+
+            return result;
+        }
+
+        private string FormatXYZ(XYZ p)
+        {
+            return $"{p.X:F6}, {p.Y:F6}, {p.Z:F6}";
         }
     }
 }

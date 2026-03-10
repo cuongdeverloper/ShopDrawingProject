@@ -1,5 +1,6 @@
 ﻿using Autodesk.Revit.DB;
 using HaweeDrawingProject.Commands;
+using HaweeDrawingProject.Models;
 using HaweeDrawingProject.Services;
 using Microsoft.Win32;
 using System.Collections.Generic;
@@ -66,8 +67,16 @@ namespace HaweeDrawingProject.ViewModels
             OpenFileDialog openFileDialog = new OpenFileDialog { Filter = "JSON files (*.json)|*.json" };
             if (openFileDialog.ShowDialog() == true)
             {
-                _pipeService.ImportPipesFromJson(openFileDialog.FileName, SelectedLevel.LevelId);
-                MessageBox.Show("Import và vẽ lại thành công!");
+                ImportResult result = _pipeService.ImportPipesFromJson(openFileDialog.FileName, SelectedLevel.LevelId);
+
+                // Build a short summary for the user
+                string summary = $"Import hoàn tất.\nPipes created: {result.PipesCreated}\nFittings created: {result.FittingsCreated}\nErrors: {result.Errors.Count}\n\n";
+                if (result.Messages.Count > 0)
+                {
+                    summary += "Notes:\n" + string.Join("\n", result.Messages);
+                }
+
+                MessageBox.Show(summary, "Import Result", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
 

@@ -58,6 +58,7 @@
     <Compile Include="Commands\RelayCommand.cs" />
     <Compile Include="Commands\ShowMainWindowCommand.cs" />
     <Compile Include="Models\ConnectorInfo.cs" />
+    <Compile Include="Models\ImportResult.cs" />
     <Compile Include="Models\MepElements.cs" />
     <Compile Include="Models\Point3D.cs" />
     <Compile Include="Models\TransformData.cs" />
